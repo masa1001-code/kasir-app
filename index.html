@@ -20,13 +20,13 @@
                 <label class="block text-sm text-gray-600">Password</label>
                 <input type="password" id="password" class="w-full border p-2 rounded mt-1 outline-none focus:border-blue-500" placeholder="******">
             </div>
-            <button onclick="window.login()" class="w-full bg-blue-500 active:bg-blue-600 text-white font-bold py-2 px-4 rounded mt-2 transition">Masuk</button>
-            <button onclick="window.register()" class="w-full bg-gray-200 active:bg-gray-300 text-gray-700 font-bold py-2 px-4 rounded mt-2 transition">Daftar Akun Baru</button>
+            <button onclick="window.login()" class="w-full bg-blue-500 text-white font-bold py-2 px-4 rounded mt-2">Masuk</button>
+            <button onclick="window.register()" class="w-full bg-gray-200 text-gray-700 font-bold py-2 px-4 rounded mt-2">Daftar Akun Baru</button>
             <p id="error-msg" class="text-red-500 text-sm text-center mt-2 hidden"></p>
         </div>
     </div>
 
-    <!-- HALAMAN KASIR (Disembunyikan dulu kalau belum login) -->
+    <!-- HALAMAN KASIR -->
     <div id="app-page" class="max-w-md mx-auto bg-white rounded-xl shadow-md overflow-hidden p-6 hidden">
         <div class="flex justify-between items-center mb-4">
             <h1 class="text-xl font-bold text-blue-600">Kasir Kita</h1>
@@ -35,8 +35,16 @@
         
         <p class="text-sm text-gray-500 mb-4 border-b pb-2">Kasir: <span id="user-email" class="font-bold text-gray-700"></span></p>
 
+        <!-- Loading Text -->
+        <p id="loading-text" class="text-center text-blue-500 text-sm font-bold mb-4">Memuat data dari database...</p>
+
         <!-- Daftar Produk -->
         <div id="product-list" class="space-y-4 mb-6 border-b pb-4"></div>
+
+        <!-- Tombol Rahasia Buat Ngisi Database Pertama Kali -->
+        <button id="btn-seed" onclick="window.isiDatabaseAwal()" class="w-full bg-purple-500 text-white text-sm py-2 rounded mb-4 hidden">
+            ✨ Klik Ini Buat Isi Produk ke Database (Sekali Aja)
+        </button>
 
         <!-- Keranjang -->
         <div>
@@ -48,20 +56,19 @@
                     <span>Total:</span>
                     <span id="total-price">Rp 0</span>
                 </div>
-                <button onclick="window.bayar()" class="w-full bg-green-500 text-white font-bold py-3 px-4 rounded mt-4">
-                    Bayar Sekarang
+                <button onclick="window.bayar()" id="btn-bayar" class="w-full bg-green-500 text-white font-bold py-3 px-4 rounded mt-4">
+                    Bayar & Simpan ke DB
                 </button>
             </div>
         </div>
     </div>
 
-    <!-- SCRIPT FIREBASE & LOGIKA APLIKASI -->
     <script type="module">
-        // Import Firebase dari Google langsung (Nggak perlu install apa-apa)
+        // Import Auth & Firestore Database
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.1/firebase-app.js";
-        import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.13.1/firebase-auth.js";
+        import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.13.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, getDocs } from "https://www.gstatic.com/firebasejs/10.13.1/firebase-firestore.js";
 
-        // Config punya lu blay
         const firebaseConfig = {
             apiKey: "AIzaSyBb5AhpFs-MFP7Y0gU22C5fq2-J2yGujhs",
             authDomain: "kasir-app-kita-10.firebaseapp.com",
@@ -71,70 +78,78 @@
             appId: "1:527965857899:web:07046114891ff249d3e92e"
         };
 
-        // Nyalain mesin Firebase
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
+        const db = getFirestore(app); // Ini mesin databasenya
 
-        // Ambil elemen HTML
+        // Variabel Global
+        let products = [];
+        let cart = [];
+        let cartTotal = 0;
+
         const loginPage = document.getElementById('login-page');
         const appPage = document.getElementById('app-page');
         const errorMsg = document.getElementById('error-msg');
-        const userEmailEl = document.getElementById('user-email');
-        const emailInput = document.getElementById('email');
-        const passInput = document.getElementById('password');
+        const btnSeed = document.getElementById('btn-seed');
+        const loadingText = document.getElementById('loading-text');
 
-        // --- SISTEM LOGIN/REGISTER ---
-
-        // Ngecek otomatis kalau user berhasil login atau udah login sebelumnya
+        // --- SISTEM LOGIN ---
         onAuthStateChanged(auth, (user) => {
             if (user) {
-                // Tembus! Tampilkan halaman kasir
                 loginPage.classList.add('hidden');
                 appPage.classList.remove('hidden');
-                userEmailEl.innerText = user.email; // Tulis email kasir di atas
-                window.renderProducts(); // Panggil daftar barang
+                document.getElementById('user-email').innerText = user.email;
+                window.muatProdukDariDB(); // Tarik data pas login
             } else {
-                // Belum login! Balik ke halaman login
                 loginPage.classList.remove('hidden');
                 appPage.classList.add('hidden');
             }
         });
 
-        // Tombol Daftar
-        window.register = () => {
-            createUserWithEmailAndPassword(auth, emailInput.value, passInput.value)
-                .then(() => { errorMsg.classList.add('hidden'); })
-                .catch((error) => {
-                    errorMsg.innerText = "Gagal: " + error.message;
-                    errorMsg.classList.remove('hidden');
-                });
+        window.login = () => signInWithEmailAndPassword(auth, document.getElementById('email').value, document.getElementById('password').value).catch(e => { errorMsg.innerText = "Gagal Login!"; errorMsg.classList.remove('hidden'); });
+        window.register = () => createUserWithEmailAndPassword(auth, document.getElementById('email').value, document.getElementById('password').value).catch(e => { errorMsg.innerText = "Gagal Daftar!"; errorMsg.classList.remove('hidden'); });
+        window.logout = () => signOut(auth);
+
+        // --- SISTEM DATABASE KASIR ---
+        
+        // 1. Fungsi Tarik Data dari Firestore
+        window.muatProdukDariDB = async () => {
+            loadingText.classList.remove('hidden');
+            const querySnapshot = await getDocs(collection(db, "products"));
+            products = [];
+            
+            querySnapshot.forEach((doc) => {
+                products.push({ id: doc.id, ...doc.data() }); // Ambil ID asli dari database
+            });
+
+            loadingText.classList.add('hidden');
+
+            if(products.length === 0) {
+                btnSeed.classList.remove('hidden'); // Munculin tombol injek data kalau kosong
+            } else {
+                btnSeed.classList.add('hidden');
+                tampilkanProduk();
+            }
         };
 
-        // Tombol Masuk
-        window.login = () => {
-            signInWithEmailAndPassword(auth, emailInput.value, passInput.value)
-                .then(() => { errorMsg.classList.add('hidden'); })
-                .catch((error) => {
-                    errorMsg.innerText = "Gagal: Email atau Password salah!";
-                    errorMsg.classList.remove('hidden');
-                });
+        // 2. Fungsi Injek Data Awal (Sekali pake aja)
+        window.isiDatabaseAwal = async () => {
+            btnSeed.innerText = "Sedang mengisi database...";
+            const dataAwal = [
+                { name: 'Kopi Hitam', price: 10000, stock: 50 },
+                { name: 'Es Teh Manis', price: 5000, stock: 30 },
+                { name: 'Mie Rebus Telur', price: 15000, stock: 20 }
+            ];
+            
+            for (const item of dataAwal) {
+                await addDoc(collection(db, "products"), item);
+            }
+            alert("Berhasil isi database! Halaman akan dimuat ulang.");
+            window.muatProdukDariDB(); // Muat ulang tampilannya
         };
 
-        // Tombol Logout
-        window.logout = () => {
-            signOut(auth);
-        };
-
-
-        // --- SISTEM KASIR ---
-        const products = [
-            { id: 1, name: 'Kopi Hitam', price: 10000, stock: 50 },
-            { id: 2, name: 'Es Teh Manis', price: 5000, stock: 30 },
-            { id: 3, name: 'Roti Bakar', price: 15000, stock: 20 }
-        ];
-        let cart = [];
-
-        window.renderProducts = () => {
+        // 3. Render Produk ke Layar
+        function tampilkanProduk() {
             const productList = document.getElementById('product-list');
             productList.innerHTML = '';
             products.forEach(product => {
@@ -142,11 +157,11 @@
                     <div class="flex justify-between items-center border-b pb-2 mt-3">
                         <div>
                             <h2 class="font-semibold">${product.name}</h2>
-                            <p class="text-xs text-gray-500">Stok: ${product.stock}</p>
+                            <p class="text-xs text-gray-500">Sisa: ${product.stock}</p>
                         </div>
                         <div class="text-right">
                             <p class="font-bold">Rp ${product.price.toLocaleString('id-ID')}</p>
-                            <button onclick="window.addToCart(${product.id})" class="bg-blue-500 text-white px-3 py-1 rounded text-sm mt-1">
+                            <button onclick="window.addToCart('${product.id}')" class="bg-blue-500 text-white px-3 py-1 rounded text-sm mt-1">
                                 + Keranjang
                             </button>
                         </div>
@@ -160,21 +175,20 @@
             const cartItem = cart.find(item => item.id === productId);
             if (cartItem) cartItem.qty += 1;
             else cart.push({ ...product, qty: 1 });
-            window.renderCart();
+            renderCart();
         };
 
-        window.renderCart = () => {
+        function renderCart() {
             const cartList = document.getElementById('cart-list');
-            const totalPriceEl = document.getElementById('total-price');
             cartList.innerHTML = '';
-            let total = 0;
+            cartTotal = 0;
 
             if (cart.length === 0) {
-                cartList.innerHTML = '<p class="text-gray-400 italic">Keranjang masih kosong</p>';
+                cartList.innerHTML = '<p class="text-gray-400 italic">Keranjang kosong</p>';
             } else {
                 cart.forEach(item => {
                     const subtotal = item.price * item.qty;
-                    total += subtotal;
+                    cartTotal += subtotal;
                     cartList.innerHTML += `
                         <div class="flex justify-between border-b border-dashed pb-1">
                             <span>${item.name} <span class="text-blue-500 font-bold">x${item.qty}</span></span>
@@ -183,18 +197,35 @@
                     `;
                 });
             }
-            totalPriceEl.innerText = `Rp ${total.toLocaleString('id-ID')}`;
-        };
+            document.getElementById('total-price').innerText = `Rp ${cartTotal.toLocaleString('id-ID')}`;
+        }
 
-        window.bayar = () => {
-            if (cart.length === 0) return alert("Keranjang masih kosong!");
+        // 4. Fungsi Bayar (Simpan ke Riwayat Database)
+        window.bayar = async () => {
+            if (cart.length === 0) return alert("Keranjang kosong bro!");
             
-            // Pas bayar, dia juga bakal catet siapa yang lagi login
-            const kasirAktif = auth.currentUser.email;
-            alert("Transaksi Berhasil!\nKasir: " + kasirAktif);
-            
-            cart = [];
-            window.renderCart();
+            const btnBayar = document.getElementById('btn-bayar');
+            btnBayar.innerText = "Menyimpan ke Database...";
+            btnBayar.disabled = true;
+
+            try {
+                // Simpan transaksi ke tabel 'transactions' di database
+                await addDoc(collection(db, "transactions"), {
+                    kasir: auth.currentUser.email,
+                    items: cart,
+                    total_harga: cartTotal,
+                    tanggal: new Date().toISOString()
+                });
+
+                alert("✅ Transaksi Berhasil Disimpan ke Database Cloud!");
+                cart = []; // Kosongin keranjang
+                renderCart();
+            } catch (error) {
+                alert("Gagal menyimpan: " + error.message);
+            }
+
+            btnBayar.innerText = "Bayar & Simpan ke DB";
+            btnBayar.disabled = false;
         };
     </script>
 </body>
